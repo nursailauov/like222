@@ -1,75 +1,29 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin Panel</title>
-  <style>
-    body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; margin:0; padding:24px; }
-    .wrap { max-width:760px; margin:0 auto; }
-    .card { background:#111827; border:1px solid #334155; border-radius:12px; padding:16px; margin-bottom:14px; }
-    input, select, button { width:100%; padding:10px; border-radius:8px; border:1px solid #475569; background:#0b1220; color:#e2e8f0; margin-top:8px; }
-    button { background:#2563eb; border:none; cursor:pointer; font-weight:700; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    .err { color:#f87171; }
-    .ok { color:#4ade80; }
-    table { width:100%; border-collapse: collapse; }
-    th, td { border-bottom:1px solid #334155; text-align:left; padding:8px; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>M222HP Admin</title>
+<style>
+:root{--bg:#050608;--line:#222a36;--red:#ff1717;--red-soft:rgba(255,20,20,.28);--text:#f2f6ff;--muted:#8391ad;--ok:#44f49f;--warn:#ff7373}
+body{margin:0;min-height:100vh;font-family:"Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at top,#10162a 0%,#06080f 45%,var(--bg) 100%);padding:24px 14px}
+.shell{width:min(900px,100%);margin:0 auto}.panel{background:linear-gradient(180deg,#0b101c,#090d15);border:1px solid var(--line);border-radius:20px;padding:18px;margin-bottom:14px;box-shadow:0 0 28px rgba(255,0,0,.12)}
+.title{margin:0 0 12px;color:var(--red);font-weight:900;text-transform:uppercase}.fields{display:grid;gap:10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+input,select,button{width:100%;border-radius:12px;border:1px solid #2a3344;background:#0a101b;color:var(--text);padding:12px}
+button{cursor:pointer;text-transform:uppercase;font-weight:900;background:linear-gradient(90deg,#ff1f1f,#c40000);border:0}
+.ok{color:var(--ok)}.err{color:var(--warn)}
+table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #2a3344;text-align:left}.muted{color:var(--muted)}
+</style>
 </head>
-<body>
-<div class="wrap">
-  <h1>Admin Panel</h1>
-
-  {% if error %}<p class="err">{{ error }}</p>{% endif %}
-  {% if message %}<p class="ok">{{ message }}</p>{% endif %}
-
-  {% if not authorized %}
-  <div class="card">
-    <form method="post" action="/admin">
-      <label>Введите пароль администратора</label>
-      <input type="password" name="password" required placeholder="Пароль">
-      <button type="submit" name="action" value="login">Войти</button>
-    </form>
-  </div>
-  {% else %}
-  <div class="card">
-    <h3>Токены по регионам</h3>
-    <table>
-      <thead><tr><th>Регион</th><th>Аккаунтов</th></tr></thead>
-      <tbody>
-      {% for server, count in token_counts.items() %}
-      <tr><td>{{ server }}</td><td>{{ count }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h3>Добавить аккаунт</h3>
-    <form method="post" action="/admin">
-      <input type="hidden" name="password" value="{{ admin_password }}">
-      <div class="row">
-        <input name="uid" placeholder="UID" required>
-        <input name="pass" placeholder="Password" required>
-      </div>
-      <select name="region" required>
-        {% for s in ["CIS","BR","US","SAC","NA","BD","RU"] %}
-        <option value="{{ s }}">{{ s }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" name="action" value="add_account">Добавить</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <h3>Кэш лайков</h3>
-    <form method="post" action="/admin">
-      <input type="hidden" name="password" value="{{ admin_password }}">
-      <button type="submit" name="action" value="reset_cache">Очистить кэш</button>
-    </form>
-  </div>
-  {% endif %}
-</div>
-</body>
-</html>
+<body><main class="shell"><h1 class="title">M222HP ADMIN PANEL</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}{% if message %}<p class="ok">{{ message }}</p>{% endif %}
+{% if not authorized %}
+<section class="panel"><h2 class="title">Вход</h2><form method="post" class="fields"><input type="password" name="password" placeholder="Пароль" required><button name="action" value="login">Войти</button></form></section>
+{% else %}
+<section class="panel"><h2 class="title">Создать API ключ</h2><form method="post" class="fields"><input type="hidden" name="password" value="{{ admin_password }}"><div class="row"><input name="new_key" placeholder="Новый ключ" required><input name="new_limit" type="number" min="1" placeholder="Лимит в день" required></div><button name="action" value="create_key">Сохранить ключ</button></form></section>
+<section class="panel"><h2 class="title">Все ключи</h2><table><thead><tr><th>Ключ</th><th>Лимит/день</th><th>Действие</th></tr></thead><tbody>{% for k,v in api_keys.items() %}<tr><td>{{ k }}</td><td>{{ v.limit }}</td><td>{% if k != 'nur' %}<form method="post"><input type="hidden" name="password" value="{{ admin_password }}"><input type="hidden" name="delete_key" value="{{ k }}"><button name="action" value="delete_key">Удалить</button></form>{% else %}<span class="muted">system</span>{% endif %}</td></tr>{% endfor %}</tbody></table></section>
+<section class="panel"><h2 class="title">Токены по регионам</h2><table><thead><tr><th>Регион</th><th>Аккаунтов</th></tr></thead><tbody>{% for server, count in token_counts.items() %}<tr><td>{{ server }}</td><td>{{ count }}</td></tr>{% endfor %}</tbody></table></section>
+<section class="panel"><h2 class="title">Добавить аккаунт</h2><form method="post" class="fields"><input type="hidden" name="password" value="{{ admin_password }}"><div class="row"><input name="uid" placeholder="UID" required><input name="pass" placeholder="Password" required></div><select name="region" required>{% for s in ["CIS","BR","US","SAC","NA","BD","RU"] %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select><button name="action" value="add_account">Добавить</button></form></section>
+<section class="panel"><h2 class="title">Кэш</h2><form method="post"><input type="hidden" name="password" value="{{ admin_password }}"><button name="action" value="reset_cache">Очистить кэш лайков</button></form></section>
+{% endif %}
+</main></body></html>

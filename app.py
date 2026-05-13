@@ -21,8 +21,23 @@ app = Flask(__name__)
 
 KEY_LIMIT = 100          # ← change to e.g. 500 if you want more likes per IP per day
 ADMIN_PASSWORD = "nurx222"
+KEYS_FILE = "api_keys.json"
 tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
+key_tracker = defaultdict(lambda: [0, time.time()])
+
+def load_api_keys():
+    if not os.path.exists(KEYS_FILE):
+        data = {"nur": {"limit": 100}}
+        with open(KEYS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        return data
+    with open(KEYS_FILE, "r") as f:
+        return json.load(f)
+
+def save_api_keys(keys_data):
+    with open(KEYS_FILE, "w") as f:
+        json.dump(keys_data, f, indent=2)
 
 def get_today_midnight_timestamp():
     now = datetime.now()
@@ -185,7 +200,9 @@ def handle_requests():
     key = request.args.get("key", "nur")
     client_ip = request.remote_addr
 
-    if key != "nur":
+    keys_data = load_api_keys()
+    key_info = keys_data.get(key)
+    if not key_info:
         return jsonify({"error": "Invalid or missing API key 🔑"}), 403
     if not uid or not server_name:
         return jsonify({"error": "uid and server_name required"}), 400
@@ -195,12 +212,14 @@ def handle_requests():
         return jsonify({"error": f"Invalid server. Use: {valid_servers}"}), 400
 
     today_midnight = get_today_midnight_timestamp()
-    count, last_reset = tracker[client_ip]
+    key_limit = int(key_info.get("limit", KEY_LIMIT))
+    tracker_key = f"{client_ip}:{key}"
+    count, last_reset = key_tracker[tracker_key]
     if last_reset < today_midnight:
-        tracker[client_ip] = [0, time.time()]
+        key_tracker[tracker_key] = [0, time.time()]
         count = 0
-    if count >= KEY_LIMIT:
-        return jsonify({"error": "Daily limit reached", "remains": f"(0/{KEY_LIMIT})"}), 429
+    if count >= key_limit:
+        return jsonify({"error": "Daily limit reached", "remains": f"(0/{key_limit})"}), 429
 
     # Get a token for checking
     accounts = load_accounts(server_name)
@@ -246,8 +265,8 @@ def handle_requests():
         player_id = int(after_data['AccountInfo']['UID'])
         like_given = after_like - before_like
         if like_given > 0:
-            tracker[client_ip][0] += 1
-        remains = KEY_LIMIT - tracker[client_ip][0]
+            key_tracker[tracker_key][0] += 1
+        remains = key_limit - key_tracker[tracker_key][0]
         return jsonify({
             "LikesGivenByAPI": like_given,
             "LikesafterCommand": after_like,
@@ -255,7 +274,7 @@ def handle_requests():
             "PlayerNickname": player_name,
             "UID": player_id,
             "status": 1 if like_given > 0 else 2,
-            "remains": f"({remains}/{KEY_LIMIT})",
+            "remains": f"({remains}/{key_limit})",
             "accounts_used": result['success']
         })
     except Exception as e:
@@ -294,13 +313,35 @@ def admin_panel():
             elif action == 'reset_cache':
                 liked_cache.clear()
                 message = 'Кэш лайков очищен'
+            elif action == 'create_key':
+                new_key = (request.form.get('new_key') or '').strip()
+                new_limit = (request.form.get('new_limit') or '').strip()
+                if not new_key or not new_limit.isdigit():
+                    error = 'Укажите key и numeric limit'
+                else:
+                    keys_data = load_api_keys()
+                    keys_data[new_key] = {"limit": int(new_limit)}
+                    save_api_keys(keys_data)
+                    message = f'Ключ {new_key} сохранен'
+            elif action == 'delete_key':
+                delete_key = (request.form.get('delete_key') or '').strip()
+                keys_data = load_api_keys()
+                if delete_key == "nur":
+                    error = 'Нельзя удалить базовый ключ nur'
+                elif delete_key in keys_data:
+                    del keys_data[delete_key]
+                    save_api_keys(keys_data)
+                    message = f'Ключ {delete_key} удален'
+                else:
+                    error = 'Ключ не найден'
             elif action == 'login':
                 message = 'Вход выполнен'
     elif password == ADMIN_PASSWORD:
         authorized = True
 
     token_counts = {srv: len(load_accounts(srv)) for srv in ["CIS", "BR", "US", "SAC", "NA", "BD", "RU"]}
-    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, admin_password=password if authorized else '')
+    keys_data = load_api_keys()
+    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, admin_password=password if authorized else '')
 
 @app.route('/token_info', methods=['GET'])
 def token_info():
@@ -318,7 +359,7 @@ def add_account():
     Usage: /add_account?uid=123456&pass=xyz&region=RU&key=nur
     """
     key = request.args.get("key") or (request.json.get("key") if request.is_json else None)
-    if key != "nur":
+    if key not in load_api_keys():
         return jsonify({"error": "Invalid key"}), 403
 
     if request.method == "GET":
@@ -348,7 +389,7 @@ def add_account():
 @app.route('/reset-cache', methods=['GET'])
 def reset_cache():
     key = request.args.get("key")
-    if key != "nur":
+    if key not in load_api_keys():
         return jsonify({"error": "Invalid key"}), 403
     liked_cache.clear()
     return jsonify({"message": "Cache cleared", "credit": "@NUR_SAILAUOV"})
