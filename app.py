@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import asyncio
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -19,7 +19,7 @@ import urllib.parse
 
 app = Flask(__name__)
 
-KEY_LIMIT = 90          # ← change to e.g. 500 if you want more likes per IP per day
+KEY_LIMIT = 100          # ← change to e.g. 500 if you want more likes per IP per day
 tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
 
@@ -181,10 +181,10 @@ def get_player_info(encrypted_uid, server_name, token):
 def handle_requests():
     uid = request.args.get("uid")
     server_name = request.args.get("server_name", "").upper()
-    key = request.args.get("key")
+    key = request.args.get("key", "nur")
     client_ip = request.remote_addr
 
-    if key != "AJAY":
+    if key != "nur":
         return jsonify({"error": "Invalid or missing API key 🔑"}), 403
     if not uid or not server_name:
         return jsonify({"error": "uid and server_name required"}), 400
@@ -260,14 +260,29 @@ def handle_requests():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/token_info', methods=['GET'])
+def token_info():
+    servers = ["CIS", "BR", "US", "SAC", "NA", "BD", "RU"]
+    data = {}
+    for srv in servers:
+        count = len(load_accounts(srv))
+        data[srv] = {"regular_tokens": count, "visit_tokens": 0}
+    return jsonify(data)
+
 # ---------- NEW ENDPOINT: ADD ACCOUNT ----------
 @app.route('/add_account', methods=['GET', 'POST'])
 def add_account():
     """Add a new uid:password to the correct region file.
-    Usage: /add_account?uid=123456&pass=xyz&region=RU&key=AJAY
+    Usage: /add_account?uid=123456&pass=xyz&region=RU&key=nur
     """
     key = request.args.get("key") or (request.json.get("key") if request.is_json else None)
-    if key != "AJAY":
+    if key != "nur":
         return jsonify({"error": "Invalid key"}), 403
 
     if request.method == "GET":
@@ -297,7 +312,7 @@ def add_account():
 @app.route('/reset-cache', methods=['GET'])
 def reset_cache():
     key = request.args.get("key")
-    if key != "AJAY":
+    if key != "nur":
         return jsonify({"error": "Invalid key"}), 403
     liked_cache.clear()
     return jsonify({"message": "Cache cleared", "credit": "@NUR_SAILAUOV"})
@@ -305,8 +320,8 @@ def reset_cache():
 if __name__ == '__main__':
     print("🚀 Smart Like API with Account Manager")
     print("📍 Endpoints:")
-    print("   GET  /like?uid=UID&server_name=REGION&key=AJAY")
-    print("   GET  /add_account?uid=...&pass=...&region=...&key=AJAY")
-    print("   GET  /reset-cache?key=AJAY")
+    print("   GET  /like?uid=UID&server_name=REGION&key=nur")
+    print("   GET  /add_account?uid=...&pass=...&region=...&key=nur")
+    print("   GET  /reset-cache?key=nur")
     print("📁 Account files: account_cis.txt, account_br.txt, account_bd.txt")
     app.run(host='0.0.0.0', port=5001, debug=True, use_reloader=False)
