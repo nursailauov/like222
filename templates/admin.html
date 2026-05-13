@@ -20,6 +20,13 @@ table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px s
 {% if not authorized %}
 <section class="panel"><h2 class="title">Вход</h2><form method="post" class="fields"><input type="password" name="password" placeholder="Пароль" required><button name="action" value="login">Войти</button></form></section>
 {% else %}
+<section class="panel"><h2 class="title">Автоскрин интерфейса</h2>
+  <p class="muted">Нажми открыть, чтобы получить автоскрин через thum.io.</p>
+  <div class="row">
+    <a href="https://image.thum.io/get/width/1400/noanimate/{{ screenshot_targets.main_ui }}" target="_blank"><button type="button">Скрин MAIN UI</button></a>
+    <a href="https://image.thum.io/get/width/1400/noanimate/{{ screenshot_targets.admin_ui }}" target="_blank"><button type="button">Скрин ADMIN UI</button></a>
+  </div>
+</section>
 <section class="panel"><h2 class="title">Создать API ключ</h2><form method="post" class="fields"><input type="hidden" name="password" value="{{ admin_password }}"><div class="row"><input name="new_key" placeholder="Новый ключ" required><input name="new_limit" type="number" min="1" placeholder="Лимит в день" required></div><button name="action" value="create_key">Сохранить ключ</button></form></section>
 <section class="panel"><h2 class="title">Все ключи</h2><table><thead><tr><th>Ключ</th><th>Лимит/день</th><th>Действие</th></tr></thead><tbody>{% for k,v in api_keys.items() %}<tr><td>{{ k }}</td><td>{{ v.limit }}</td><td>{% if k != 'nur' %}<form method="post"><input type="hidden" name="password" value="{{ admin_password }}"><input type="hidden" name="delete_key" value="{{ k }}"><button name="action" value="delete_key">Удалить</button></form>{% else %}<span class="muted">system</span>{% endif %}</td></tr>{% endfor %}</tbody></table></section>
 <section class="panel"><h2 class="title">Токены по регионам</h2><table><thead><tr><th>Регион</th><th>Аккаунтов</th></tr></thead><tbody>{% for server, count in token_counts.items() %}<tr><td>{{ server }}</td><td>{{ count }}</td></tr>{% endfor %}</tbody></table></section>

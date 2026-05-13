@@ -16,28 +16,50 @@ from datetime import datetime
 import random
 import os
 import urllib.parse
+import tempfile
 
 app = Flask(__name__)
 
 KEY_LIMIT = 100          # ← change to e.g. 500 if you want more likes per IP per day
 ADMIN_PASSWORD = "nurx222"
-KEYS_FILE = "api_keys.json"
+KEYS_FILE = os.environ.get("KEYS_FILE", "api_keys.json")
 tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
 key_tracker = defaultdict(lambda: [0, time.time()])
 
 def load_api_keys():
-    if not os.path.exists(KEYS_FILE):
-        data = {"nur": {"limit": 100}}
-        with open(KEYS_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-        return data
-    with open(KEYS_FILE, "r") as f:
-        return json.load(f)
+    default_data = {"nur": {"limit": 100}}
+    candidate_paths = [KEYS_FILE, os.path.join(tempfile.gettempdir(), "api_keys.json")]
+
+    for path in candidate_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    return json.load(f)
+        except Exception:
+            continue
+
+    for path in candidate_paths:
+        try:
+            with open(path, "w") as f:
+                json.dump(default_data, f, indent=2)
+            return default_data
+        except Exception:
+            continue
+    return default_data
 
 def save_api_keys(keys_data):
-    with open(KEYS_FILE, "w") as f:
-        json.dump(keys_data, f, indent=2)
+    candidate_paths = [KEYS_FILE, os.path.join(tempfile.gettempdir(), "api_keys.json")]
+    last_error = None
+    for path in candidate_paths:
+        try:
+            with open(path, "w") as f:
+                json.dump(keys_data, f, indent=2)
+            return True
+        except Exception as e:
+            last_error = e
+    print(f"⚠️ Could not save api keys: {last_error}")
+    return False
 
 def get_today_midnight_timestamp():
     now = datetime.now()
@@ -321,8 +343,10 @@ def admin_panel():
                 else:
                     keys_data = load_api_keys()
                     keys_data[new_key] = {"limit": int(new_limit)}
-                    save_api_keys(keys_data)
-                    message = f'Ключ {new_key} сохранен'
+                    if save_api_keys(keys_data):
+                        message = f'Ключ {new_key} сохранен'
+                    else:
+                        error = 'Не удалось сохранить ключ (read-only fs)'
             elif action == 'delete_key':
                 delete_key = (request.form.get('delete_key') or '').strip()
                 keys_data = load_api_keys()
@@ -330,8 +354,10 @@ def admin_panel():
                     error = 'Нельзя удалить базовый ключ nur'
                 elif delete_key in keys_data:
                     del keys_data[delete_key]
-                    save_api_keys(keys_data)
-                    message = f'Ключ {delete_key} удален'
+                    if save_api_keys(keys_data):
+                        message = f'Ключ {delete_key} удален'
+                    else:
+                        error = 'Не удалось удалить ключ (read-only fs)'
                 else:
                     error = 'Ключ не найден'
             elif action == 'login':
@@ -341,7 +367,11 @@ def admin_panel():
 
     token_counts = {srv: len(load_accounts(srv)) for srv in ["CIS", "BR", "US", "SAC", "NA", "BD", "RU"]}
     keys_data = load_api_keys()
-    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, admin_password=password if authorized else '')
+    screenshot_targets = {
+        "main_ui": request.url_root.rstrip("/") + "/",
+        "admin_ui": request.url_root.rstrip("/") + "/admin?password=" + ADMIN_PASSWORD
+    }
+    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, admin_password=password if authorized else '', screenshot_targets=screenshot_targets)
 
 @app.route('/token_info', methods=['GET'])
 def token_info():
