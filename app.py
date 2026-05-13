@@ -52,7 +52,7 @@ def reset_key_usage(target_key=None):
         key_tracker.pop(item, None)
 
 def load_api_keys():
-    default_data = {"nur": {"limit": 100}}
+    default_data = {"nur": {"limit": 100, "disabled": False, "expires_at": None}}
     candidate_paths = [KEYS_FILE, os.path.join(tempfile.gettempdir(), "api_keys.json")]
 
     for path in candidate_paths:
@@ -84,6 +84,16 @@ def save_api_keys(keys_data):
             last_error = e
     print(f"⚠️ Could not save api keys: {last_error}")
     return False
+
+def is_key_expired(key_info):
+    expires_at = key_info.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        exp_dt = datetime.strptime(expires_at, "%Y-%m-%d")
+        return datetime.now().date() > exp_dt.date()
+    except Exception:
+        return False
 
 def get_today_midnight_timestamp():
     now = datetime.now()
@@ -250,6 +260,8 @@ def handle_requests():
     key_info = keys_data.get(key)
     if not key_info:
         return jsonify({"error": "Invalid or missing API key 🔑"}), 403
+    if is_key_expired(key_info):
+        return jsonify({"error": "API key expired"}), 403
     if not uid or not server_name:
         return jsonify({"error": "uid and server_name required"}), 400
 
@@ -365,11 +377,12 @@ def admin_panel():
             elif action == 'create_key':
                 new_key = (request.form.get('new_key') or '').strip()
                 new_limit = (request.form.get('new_limit') or '').strip()
+                expires_at = (request.form.get('expires_at') or '').strip() or None
                 if not new_key or not new_limit.isdigit():
                     error = 'Укажите key и numeric limit'
                 else:
                     keys_data = load_api_keys()
-                    keys_data[new_key] = {"limit": int(new_limit)}
+                    keys_data[new_key] = {"limit": int(new_limit), "disabled": False, "expires_at": expires_at}
                     if save_api_keys(keys_data):
                         message = f'Ключ {new_key} сохранен'
                     else:
@@ -390,11 +403,14 @@ def admin_panel():
             elif action == 'update_limit':
                 target_key = (request.form.get('target_key') or '').strip()
                 new_limit = (request.form.get('new_limit') or '').strip()
+                expires_at = (request.form.get('expires_at') or '').strip()
                 keys_data = load_api_keys()
                 if target_key not in keys_data or not new_limit.isdigit():
                     error = 'Неверный key или limit'
                 else:
                     keys_data[target_key]["limit"] = int(new_limit)
+                    if expires_at:
+                        keys_data[target_key]["expires_at"] = expires_at
                     if save_api_keys(keys_data):
                         message = f'Лимит ключа {target_key} обновлен'
                     else:
@@ -436,8 +452,16 @@ def admin_panel():
     for key_name, info in keys_data.items():
         limit = int(info.get("limit", KEY_LIMIT))
         used = int(usage_today.get(key_name, 0))
-        remaining = max(limit - used, 0)
-        key_stats[key_name] = {"limit": limit, "used": used, "remaining": remaining, "disabled": bool(info.get("disabled", False))}
+        expired = is_key_expired(info)
+        remaining = 0 if expired else max(limit - used, 0)
+        key_stats[key_name] = {
+            "limit": limit,
+            "used": used,
+            "remaining": remaining,
+            "disabled": bool(info.get("disabled", False)),
+            "expired": expired,
+            "expires_at": info.get("expires_at")
+        }
     return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, key_stats=key_stats, admin_password=password if authorized else '')
 
 @app.route('/token_info', methods=['GET'])
