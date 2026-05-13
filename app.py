@@ -39,6 +39,18 @@ def get_key_usage_today():
             usage[key] += count
     return usage
 
+def reset_key_usage(target_key=None):
+    """Reset usage counters for one key or all keys."""
+    keys_to_delete = []
+    for tracker_key in key_tracker.keys():
+        if ":" not in tracker_key:
+            continue
+        _, key_name = tracker_key.rsplit(":", 1)
+        if target_key is None or key_name == target_key:
+            keys_to_delete.append(tracker_key)
+    for item in keys_to_delete:
+        key_tracker.pop(item, None)
+
 def load_api_keys():
     default_data = {"nur": {"limit": 100}}
     candidate_paths = [KEYS_FILE, os.path.join(tempfile.gettempdir(), "api_keys.json")]
@@ -246,6 +258,9 @@ def handle_requests():
         return jsonify({"error": f"Invalid server. Use: {valid_servers}"}), 400
 
     today_midnight = get_today_midnight_timestamp()
+    if bool(key_info.get("disabled", False)):
+        return jsonify({"error": "API key is disabled"}), 403
+
     key_limit = int(key_info.get("limit", KEY_LIMIT))
     tracker_key = f"{client_ip}:{key}"
     count, last_reset = key_tracker[tracker_key]
@@ -372,6 +387,43 @@ def admin_panel():
                         error = 'Не удалось удалить ключ (read-only fs)'
                 else:
                     error = 'Ключ не найден'
+            elif action == 'update_limit':
+                target_key = (request.form.get('target_key') or '').strip()
+                new_limit = (request.form.get('new_limit') or '').strip()
+                keys_data = load_api_keys()
+                if target_key not in keys_data or not new_limit.isdigit():
+                    error = 'Неверный key или limit'
+                else:
+                    keys_data[target_key]["limit"] = int(new_limit)
+                    if save_api_keys(keys_data):
+                        message = f'Лимит ключа {target_key} обновлен'
+                    else:
+                        error = 'Не удалось сохранить новый лимит'
+            elif action == 'toggle_key':
+                target_key = (request.form.get('target_key') or '').strip()
+                keys_data = load_api_keys()
+                if target_key not in keys_data:
+                    error = 'Ключ не найден'
+                elif target_key == "nur":
+                    error = 'Базовый ключ nur нельзя отключить'
+                else:
+                    current = bool(keys_data[target_key].get("disabled", False))
+                    keys_data[target_key]["disabled"] = not current
+                    if save_api_keys(keys_data):
+                        state = "отключен" if keys_data[target_key]["disabled"] else "включен"
+                        message = f'Ключ {target_key} {state}'
+                    else:
+                        error = 'Не удалось изменить статус ключа'
+            elif action == 'reset_key_usage':
+                target_key = (request.form.get('target_key') or '').strip()
+                if not target_key:
+                    error = 'Укажите key для сброса лимита'
+                else:
+                    reset_key_usage(target_key)
+                    message = f'Лимит ключа {target_key} сброшен'
+            elif action == 'reset_all_usage':
+                reset_key_usage()
+                message = 'Лимиты всех ключей сброшены'
             elif action == 'login':
                 message = 'Вход выполнен'
     elif password == ADMIN_PASSWORD:
@@ -385,7 +437,7 @@ def admin_panel():
         limit = int(info.get("limit", KEY_LIMIT))
         used = int(usage_today.get(key_name, 0))
         remaining = max(limit - used, 0)
-        key_stats[key_name] = {"limit": limit, "used": used, "remaining": remaining}
+        key_stats[key_name] = {"limit": limit, "used": used, "remaining": remaining, "disabled": bool(info.get("disabled", False))}
     return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, key_stats=key_stats, admin_password=password if authorized else '')
 
 @app.route('/token_info', methods=['GET'])
