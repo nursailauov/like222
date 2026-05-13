@@ -27,6 +27,18 @@ tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
 key_tracker = defaultdict(lambda: [0, time.time()])
 
+def get_key_usage_today():
+    today_midnight = get_today_midnight_timestamp()
+    usage = defaultdict(int)
+    for tracker_key, value in key_tracker.items():
+        count, last_reset = value
+        if last_reset < today_midnight:
+            continue
+        if ":" in tracker_key:
+            _, key = tracker_key.rsplit(":", 1)
+            usage[key] += count
+    return usage
+
 def load_api_keys():
     default_data = {"nur": {"limit": 100}}
     candidate_paths = [KEYS_FILE, os.path.join(tempfile.gettempdir(), "api_keys.json")]
@@ -367,11 +379,14 @@ def admin_panel():
 
     token_counts = {srv: len(load_accounts(srv)) for srv in ["CIS", "BR", "US", "SAC", "NA", "BD", "RU"]}
     keys_data = load_api_keys()
-    screenshot_targets = {
-        "main_ui": request.url_root.rstrip("/") + "/",
-        "admin_ui": request.url_root.rstrip("/") + "/admin?password=" + ADMIN_PASSWORD
-    }
-    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, admin_password=password if authorized else '', screenshot_targets=screenshot_targets)
+    usage_today = get_key_usage_today()
+    key_stats = {}
+    for key_name, info in keys_data.items():
+        limit = int(info.get("limit", KEY_LIMIT))
+        used = int(usage_today.get(key_name, 0))
+        remaining = max(limit - used, 0)
+        key_stats[key_name] = {"limit": limit, "used": used, "remaining": remaining}
+    return render_template('admin.html', authorized=authorized, error=error, message=message, token_counts=token_counts, api_keys=keys_data, key_stats=key_stats, admin_password=password if authorized else '')
 
 @app.route('/token_info', methods=['GET'])
 def token_info():
