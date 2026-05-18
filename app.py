@@ -5,7 +5,6 @@ from Crypto.Util.Padding import pad
 from google.protobuf.json_format import MessageToJson
 import binascii
 import aiohttp
-import hashlib
 import json
 import like_pb2
 import like_count_pb2
@@ -53,130 +52,20 @@ def get_region_filename(server_name):
     return "account_bd.txt"
 
 
-def token_hash(token):
-    return hashlib.sha256(token.encode('utf-8')).hexdigest()
-
-
-def account_identity(account):
-    identity = account.get('uid') or account.get('account_id') or account.get('open_id')
-    if identity:
-        return str(identity)
-
-    token = account.get('access_token') or account.get('token') or account.get('jwt_token') or ''
-    if token:
-        return 'token:' + token_hash(token)[:16]
-    return ''
-
-
-def parse_json_account(raw, server_name):
-    try:
-        account = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-
-    if not isinstance(account, dict):
-        return None
-
-    region = str(account.get('region', server_name)).upper()
-    if region and region != server_name:
-        return None
-
-    uid = str(account.get('uid') or account.get('account_id') or '').strip()
-    password = str(account.get('password') or account.get('pass') or '').strip()
-    token = str(account.get('access_token') or account.get('token') or account.get('jwt_token') or '').strip()
-    open_id = str(account.get('open_id') or '').strip()
-
-    if token:
-        return {
-            "uid": uid or open_id,
-            "account_id": uid,
-            "open_id": open_id,
-            "account_name": account.get('account_name'),
-            "platform": account.get('platform'),
-            "region": region,
-            "access_token": token,
-        }
-    if uid and password:
-        return {"uid": uid, "password": password, "region": region}
-    return None
-
-
-def read_accounts_file(filename, server_name):
+def read_accounts_file(filename):
     accounts = []
     with open(filename, "r") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-            if line.startswith('{'):
-                account = parse_json_account(line, server_name)
-                if account:
-                    accounts.append(account)
-                continue
             if ':' in line:
                 uid, pwd = line.split(':', 1)
                 uid = uid.strip()
                 pwd = pwd.strip()
                 if uid and pwd:
-                    accounts.append({"uid": uid, "password": pwd, "region": server_name})
+                    accounts.append({"uid": uid, "password": pwd})
     return accounts
-
-
-def load_env_accounts(server_name):
-    raw = os.environ.get('EXTRA_ACCOUNTS_JSON', '').strip()
-    if not raw:
-        return []
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        return []
-
-    accounts = []
-    for item in parsed:
-        account = parse_json_account(json.dumps(item), server_name)
-        if account:
-            accounts.append(account)
-    return accounts
-
-
-def get_env_accounts_status():
-    raw = os.environ.get('EXTRA_ACCOUNTS_JSON', '').strip()
-    status = {
-        "present": bool(raw),
-        "length": len(raw),
-        "json_valid": False,
-        "json_type": None,
-        "total_items": 0,
-        "valid_by_region": {},
-        "error": None,
-    }
-    if not raw:
-        return status
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        status["error"] = f"JSON error at char {exc.pos}: {exc.msg}"
-        return status
-
-    status["json_valid"] = True
-    status["json_type"] = type(parsed).__name__
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    if not isinstance(parsed, list):
-        status["error"] = "Value must be a JSON object or array"
-        return status
-
-    status["total_items"] = len(parsed)
-    for srv in VALID_SERVERS:
-        status["valid_by_region"][srv] = len(load_env_accounts(srv))
-    return status
 
 
 def load_accounts(server_name):
@@ -187,16 +76,15 @@ def load_accounts(server_name):
 
     now = time.time()
     mtime = os.path.getmtime(filename)
-    env_accounts = load_env_accounts(server_name)
     cached = account_cache.get(filename)
     if cached:
         cached_mtime, expires_at, accounts = cached
         if cached_mtime == mtime and expires_at > now:
-            return accounts + env_accounts
+            return accounts
 
-    accounts = read_accounts_file(filename, server_name)
+    accounts = read_accounts_file(filename)
     account_cache[filename] = (mtime, now + ACCOUNT_CACHE_TTL, accounts)
-    return accounts + env_accounts
+    return accounts
 
 
 def clear_account_cache(server_name=None):
@@ -216,21 +104,20 @@ def save_account_to_file(uid, password, server_name):
     return filename
 
 
-def get_cached_jwt(cache_key):
-    cached = jwt_cache.get(cache_key)
+def get_cached_jwt(uid, password):
+    cached = jwt_cache.get((uid, password))
     if not cached:
         return None
 
     token, expires_at = cached
     if expires_at <= time.time():
-        jwt_cache.pop(cache_key, None)
+        jwt_cache.pop((uid, password), None)
         return None
     return token
 
 
 async def generate_jwt_token(uid, password, session):
-    cache_key = ('guest', uid, password)
-    cached_token = get_cached_jwt(cache_key)
+    cached_token = get_cached_jwt(uid, password)
     if cached_token:
         return cached_token
 
@@ -242,48 +129,11 @@ async def generate_jwt_token(uid, password, session):
                 data = await response.json(content_type=None)
                 token = data.get('jwt_token') or data.get('token') if isinstance(data, dict) else None
                 if token:
-                    jwt_cache[cache_key] = (token, time.time() + JWT_CACHE_TTL)
+                    jwt_cache[(uid, password)] = (token, time.time() + JWT_CACHE_TTL)
                     return token
         return None
     except Exception:
         return None
-
-
-async def generate_jwt_from_access_token(access_token, session):
-    cache_key = ('access', token_hash(access_token))
-    cached_token = get_cached_jwt(cache_key)
-    if cached_token:
-        return cached_token
-
-    try:
-        encoded_token = urllib.parse.quote(access_token)
-        url = f"https://jwt-henna.vercel.app/token?access_token={encoded_token}"
-        async with session.get(url, timeout=HTTP_TIMEOUT) as response:
-            if response.status == 200:
-                data = await response.json(content_type=None)
-                token = data.get('jwt_token') or data.get('token') if isinstance(data, dict) else None
-                if token:
-                    jwt_cache[cache_key] = (token, time.time() + JWT_CACHE_TTL)
-                    return token
-        return None
-    except Exception:
-        return None
-
-
-async def resolve_account_token(account, session):
-    access_token = account.get('access_token') or account.get('token')
-    if access_token:
-        return await generate_jwt_from_access_token(access_token, session)
-
-    jwt_token = account.get('jwt_token')
-    if jwt_token:
-        return jwt_token
-
-    uid = account.get('uid')
-    password = account.get('password')
-    if not uid or not password:
-        return None
-    return await generate_jwt_token(uid, password, session)
 
 
 def encrypt_message(plaintext):
@@ -313,14 +163,13 @@ async def send_like(encrypted_uid, token, url, session):
 
 async def process_account(target_uid, encrypted_uid, account, url, semaphore, session):
     async with semaphore:
-        token = await resolve_account_token(account, session)
-        identity = account_identity(account)
+        token = await generate_jwt_token(account['uid'], account['password'], session)
         if not token:
-            return 500, identity
+            return 500, account['uid']
         status = await send_like(encrypted_uid, token, url, session)
         if status == 200:
-            liked_cache[target_uid].add(identity)
-        return status, identity
+            liked_cache[target_uid].add(account['uid'])
+        return status, account['uid']
 
 
 async def send_all_likes(target_uid, server_name, url, session):
@@ -331,7 +180,7 @@ async def send_all_likes(target_uid, server_name, url, session):
         return {'success': 0, 'failed': 0, 'total': 0, 'already_liked': 0}
 
     already_liked = liked_cache.get(target_uid, set())
-    fresh_accounts = [acc for acc in accounts if account_identity(acc) not in already_liked]
+    fresh_accounts = [acc for acc in accounts if acc['uid'] not in already_liked]
 
     if not fresh_accounts:
         return {'success': 0, 'failed': 0, 'total': len(accounts), 'already_liked': len(already_liked), 'fresh_used': 0}
@@ -391,7 +240,7 @@ async def get_player_info_async(encrypted_uid, server_name, token, session):
 
 
 async def generate_check_token(accounts, session):
-    tasks = [resolve_account_token(acc, session) for acc in accounts[:5]]
+    tasks = [generate_jwt_token(acc['uid'], acc['password'], session) for acc in accounts[:5]]
     for task in asyncio.as_completed(tasks):
         token = await task
         if token:
@@ -493,14 +342,6 @@ def token_info():
         count = len(load_accounts(srv))
         data[srv] = {"regular_tokens": count, "visit_tokens": 0}
     return jsonify(data)
-
-
-@app.route('/env_debug', methods=['GET'])
-def env_debug():
-    key = request.args.get("key")
-    if key != "nur":
-        return jsonify({"error": "Invalid key"}), 403
-    return jsonify(get_env_accounts_status())
 
 
 @app.route('/add_account', methods=['GET', 'POST'])
