@@ -53,6 +53,10 @@ def get_region_filename(server_name):
     return "account_bd.txt"
 
 
+def token_hash(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
 def account_identity(account):
     identity = account.get('uid') or account.get('account_id') or account.get('open_id')
     if identity:
@@ -60,7 +64,7 @@ def account_identity(account):
 
     token = account.get('access_token') or account.get('token') or account.get('jwt_token') or ''
     if token:
-        return 'token:' + hashlib.sha256(token.encode('utf-8')).hexdigest()[:16]
+        return 'token:' + token_hash(token)[:16]
     return ''
 
 
@@ -212,20 +216,21 @@ def save_account_to_file(uid, password, server_name):
     return filename
 
 
-def get_cached_jwt(uid, password):
-    cached = jwt_cache.get((uid, password))
+def get_cached_jwt(cache_key):
+    cached = jwt_cache.get(cache_key)
     if not cached:
         return None
 
     token, expires_at = cached
     if expires_at <= time.time():
-        jwt_cache.pop((uid, password), None)
+        jwt_cache.pop(cache_key, None)
         return None
     return token
 
 
 async def generate_jwt_token(uid, password, session):
-    cached_token = get_cached_jwt(uid, password)
+    cache_key = ('guest', uid, password)
+    cached_token = get_cached_jwt(cache_key)
     if cached_token:
         return cached_token
 
@@ -237,7 +242,28 @@ async def generate_jwt_token(uid, password, session):
                 data = await response.json(content_type=None)
                 token = data.get('jwt_token') or data.get('token') if isinstance(data, dict) else None
                 if token:
-                    jwt_cache[(uid, password)] = (token, time.time() + JWT_CACHE_TTL)
+                    jwt_cache[cache_key] = (token, time.time() + JWT_CACHE_TTL)
+                    return token
+        return None
+    except Exception:
+        return None
+
+
+async def generate_jwt_from_access_token(access_token, session):
+    cache_key = ('access', token_hash(access_token))
+    cached_token = get_cached_jwt(cache_key)
+    if cached_token:
+        return cached_token
+
+    try:
+        encoded_token = urllib.parse.quote(access_token)
+        url = f"https://jwt-henna.vercel.app/token?access_token={encoded_token}"
+        async with session.get(url, timeout=HTTP_TIMEOUT) as response:
+            if response.status == 200:
+                data = await response.json(content_type=None)
+                token = data.get('jwt_token') or data.get('token') if isinstance(data, dict) else None
+                if token:
+                    jwt_cache[cache_key] = (token, time.time() + JWT_CACHE_TTL)
                     return token
         return None
     except Exception:
@@ -245,9 +271,13 @@ async def generate_jwt_token(uid, password, session):
 
 
 async def resolve_account_token(account, session):
-    token = account.get('access_token') or account.get('token') or account.get('jwt_token')
-    if token:
-        return token
+    access_token = account.get('access_token') or account.get('token')
+    if access_token:
+        return await generate_jwt_from_access_token(access_token, session)
+
+    jwt_token = account.get('jwt_token')
+    if jwt_token:
+        return jwt_token
 
     uid = account.get('uid')
     password = account.get('password')
