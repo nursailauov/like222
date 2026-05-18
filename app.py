@@ -5,6 +5,7 @@ from Crypto.Util.Padding import pad
 from google.protobuf.json_format import MessageToJson
 import binascii
 import aiohttp
+import hashlib
 import json
 import like_pb2
 import like_count_pb2
@@ -53,7 +54,14 @@ def get_region_filename(server_name):
 
 
 def account_identity(account):
-    return str(account.get('uid') or account.get('account_id') or account.get('open_id') or '')
+    identity = account.get('uid') or account.get('account_id') or account.get('open_id')
+    if identity:
+        return str(identity)
+
+    token = account.get('access_token') or account.get('token') or account.get('jwt_token') or ''
+    if token:
+        return 'token:' + hashlib.sha256(token.encode('utf-8')).hexdigest()[:16]
+    return ''
 
 
 def parse_json_account(raw, server_name):
@@ -74,8 +82,6 @@ def parse_json_account(raw, server_name):
     token = str(account.get('access_token') or account.get('token') or account.get('jwt_token') or '').strip()
     open_id = str(account.get('open_id') or '').strip()
 
-    if not uid and not open_id:
-        return None
     if token:
         return {
             "uid": uid or open_id,
